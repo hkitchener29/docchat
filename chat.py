@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from groq import Groq
 
 load_dotenv()
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+client = Groq(api_key=os.environ.get("GROQ_API_KEY") or "offline-test")
 
 def llm(messages, temperature=1):
     completion = client.chat.completions.create(
