@@ -24,7 +24,23 @@ SPECIAL = ('compact', 'image')
 
 
 def _schema(name, description, properties, required):
-    """Build the tool description the model sees for one function."""
+    """Build the tool description the model sees for one function.
+
+    >>> _schema('ls', 'List files.', {'path': 'A folder'}, []) == {
+    ...     'type': 'function',
+    ...     'function': {
+    ...         'name': 'ls',
+    ...         'description': 'List files.',
+    ...         'parameters': {
+    ...             'type': 'object',
+    ...             'properties': {
+    ...                 'path': {'type': 'string', 'description': 'A folder'}},
+    ...             'required': [],
+    ...         },
+    ...     },
+    ... }
+    True
+    """
     return {
         'type': 'function',
         'function': {
@@ -55,12 +71,35 @@ TOOLS = [
 
 
 def get_client():
-    """Create a Groq client using the API key from the environment."""
+    """Create a Groq client using the API key from the environment.
+
+    >>> from unittest.mock import patch
+    >>> with patch('chat.Groq') as groq, patch.dict(
+    ...         'os.environ', {'GROQ_API_KEY': 'fake'}):
+    ...     client = get_client()
+    >>> groq.call_args.kwargs
+    {'api_key': 'fake'}
+    >>> client is groq.return_value
+    True
+    """
     return Groq(api_key=os.environ['GROQ_API_KEY'])
 
 
 def llm(messages, tools=None, temperature=0.8):
-    """Send the conversation to the model and return its reply message."""
+    """Send the conversation to the model and return its reply message.
+
+    >>> from unittest.mock import patch
+    >>> with patch('chat.get_client') as fake_client:
+    ...     request = fake_client.return_value.chat.completions.create
+    ...     request.return_value.choices[0].message = 'a reply'
+    ...     reply = llm([{'role': 'user', 'content': 'Hi'}], temperature=0)
+    >>> reply
+    'a reply'
+    >>> request.call_args.kwargs['temperature']
+    0
+    >>> request.call_args.kwargs['messages']
+    [{'role': 'user', 'content': 'Hi'}]
+    """
     client = get_client()  # created only when a request is made
     response = client.chat.completions.create(
         model=MODEL,
