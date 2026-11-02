@@ -194,7 +194,8 @@ class Chat:
     """
 
     def __init__(self, system=SYSTEM, debug=False):
-        self.messages = [{"role": "system", "content": system}]
+        """Start a conversation with a system prompt and an optional debug flag."""
+	self.messages = [{"role": "system", "content": system}]
         self.debug = debug
 
     def run_tool(self, name, arguments):
