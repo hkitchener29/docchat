@@ -16,6 +16,8 @@ chat = "chat:repl"
 
 [tool.setuptools]
 py-modules = ["chat"]
+packages = ["tools"]
 
 [tool.pytest.ini_options]
 doctest_optionflags = ["NORMALIZE_WHITESPACE"]
+testpaths = ["chat.py", "tools"]
