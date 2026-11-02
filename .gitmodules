@@ -1,0 +1,6 @@
+[submodule "test_projects/lab-homepage"]
+	path = test_projects/lab-homepage
+	url = https://github.com/hkitchener29/lab-homepage.git
+[submodule "test_projects/ebay-scraper"]
+	path = test_projects/ebay-scraper
+	url = https://github.com/hkitchener29/ebay-scraper.git
