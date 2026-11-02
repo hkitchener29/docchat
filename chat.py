@@ -1,4 +1,5 @@
 """A command-line chatbot that answers questions about files using tools."""
+import argparse
 import json
 import os
 import shlex
@@ -8,16 +9,18 @@ from groq import Groq
 
 from tools.calculate import calculate
 from tools.cat import cat
+from tools.compact import compact
 from tools.grep import grep
+from tools.load_image import load_image
 from tools.ls import ls
-from tools.path_safety import is_path_safe  # noqa: F401
 
 load_dotenv()
 
 SYSTEM = "You are a helpful assistant. You always speak like a pirate."
-MODEL = 'openai/gpt-oss-20b'  # change this to a model your key can use
+MODEL = 'openai/gpt-oss-20b'
 
 FUNCTIONS = {'calculate': calculate, 'ls': ls, 'cat': cat, 'grep': grep}
+SPECIAL = ('compact', 'image')
 
 
 def _schema(name, description, properties, required):
@@ -75,7 +78,7 @@ class Chat:
     Tool requests from the model run automatically, and slash commands run
     a tool directly. Either way the result is added to the history.
 
-    >>> from unittest.mock import patch
+    >>> from unittest.mock import patch, call
     >>> with patch('chat.get_client') as get_client:
     ...     request = get_client.return_value.chat.completions.create
     ...     message = request.return_value.choices[0].message
@@ -100,9 +103,9 @@ class Chat:
     A tool request from the model runs the function and sends back the result:
 
     >>> from types import SimpleNamespace as NS
-    >>> call = NS(id='call-1', function=NS(
+    >>> call1 = NS(id='call-1', function=NS(
     ...     name='calculate', arguments='{"expression": "2 + 3"}'))
-    >>> asked = NS(content=None, tool_calls=[call], model_dump=lambda **kw: {
+    >>> asked = NS(content=None, tool_calls=[call1], model_dump=lambda **kw: {
     ...     'role': 'assistant',
     ...     'tool_calls': [{'id': 'call-1', 'type': 'function', 'function': {
     ...         'name': 'calculate', 'arguments': '{"expression": "2 + 3"}'}}]})
@@ -139,13 +142,27 @@ class Chat:
     'Error: wrong arguments for grep'
     >>> chat.run_slash('/')
     'Error: no command given'
+
+    With debug on, each tool name and its arguments are printed:
+
+    >>> chat = Chat(system='Be brief.', debug=True)
+    >>> with patch('builtins.print') as output:
+    ...     result = chat.run_tool('calculate', {'expression': '2 + 3'})
+    >>> result
+    '5'
+    >>> output.call_args_list
+    [call("[debug] calculate(expression='2 + 3')")]
     """
 
-    def __init__(self, system=SYSTEM):
+    def __init__(self, system=SYSTEM, debug=False):
         self.messages = [{"role": "system", "content": system}]
+        self.debug = debug
 
     def run_tool(self, name, arguments):
         """Run the named tool with a dictionary of arguments and return its result."""
+        if self.debug:
+            shown = ', '.join(f'{k}={v!r}' for k, v in arguments.items())
+            print(f'[debug] {name}({shown})')
         if name not in FUNCTIONS:
             return f'Error: unknown tool {name}'
         try:
@@ -162,10 +179,16 @@ class Chat:
         if not parts:
             return 'Error: no command given'
         name, args = parts[0], parts[1:]
-        if name not in FUNCTIONS:
+        if name not in FUNCTIONS and name not in SPECIAL:
             return f'Error: unknown command {name}'
-        if name == 'calculate':
+        if name in ('calculate', 'image'):
             args = [' '.join(args)]
+        if self.debug:
+            print(f'[debug] {name}({", ".join(repr(a) for a in args)})')
+        if name == 'compact':
+            return compact(self)
+        if name == 'image':
+            return load_image(self, args[0])
         try:
             output = str(FUNCTIONS[name](*args))
         except TypeError:
@@ -199,7 +222,18 @@ class Chat:
         return content
 
 
-def repl(temperature=0.8):
+def respond(chat, line, temperature=0.8):
+    """Return the output for one input line: a slash command or a model answer.
+
+    >>> respond(Chat(), '/calculate 6 * 7')
+    '42'
+    """
+    if line.startswith('/'):
+        return chat.run_slash(line)
+    return chat.send_message(line, temperature=temperature)
+
+
+def repl(temperature=0.8, debug=False):
     """Run the chatbot conversation, handling /commands without the model.
 
     >>> from unittest.mock import patch, call
@@ -207,13 +241,13 @@ def repl(temperature=0.8):
     ...     request = get_client.return_value.chat.completions.create
     ...     captured = []
     ...     replies = iter(['Hello!', 'Goodbye!'])
-    ...     def respond(**kwargs):
+    ...     def respond_fake(**kwargs):
     ...         captured.append([m.copy() for m in kwargs['messages']])
     ...         message = request.return_value.choices[0].message
     ...         message.content = next(replies)
     ...         message.tool_calls = None
     ...         return request.return_value
-    ...     request.side_effect = respond
+    ...     request.side_effect = respond_fake
     ...     repl(temperature=0)
     >>> output.call_args_list
     [call('Hello!'), call('Goodbye!'), call()]
@@ -248,17 +282,46 @@ def repl(temperature=0.8):
     >>> output.call_args_list
     [call()]
     """
-    chat = Chat()
+    chat = Chat(debug=debug)
     try:
         while True:
             user_input = input("chat> ")
-            if user_input.startswith('/'):
-                print(chat.run_slash(user_input))
-            else:
-                print(chat.send_message(user_input, temperature=temperature))
+            print(respond(chat, user_input, temperature=temperature))
     except (KeyboardInterrupt, EOFError):
         print()
 
 
+def main(argv=None):
+    """Run chat: one message if given on the command line, else the repl.
+
+    >>> from unittest.mock import patch, call
+    >>> from types import SimpleNamespace as NS
+    >>> reply = NS(content='Hi there', tool_calls=None)
+    >>> with patch('chat.llm', return_value=reply), patch('builtins.print') as output:
+    ...     main(['hello'])
+    >>> output.call_args_list
+    [call('Hi there')]
+    >>> with patch('builtins.print') as output:
+    ...     main(['--debug', '/calculate 2 + 3'])
+    >>> output.call_args_list
+    [call("[debug] calculate('2 + 3')"), call('5')]
+    >>> with patch('chat.repl') as fake_repl:
+    ...     main(['--debug'])
+    >>> fake_repl.call_args
+    call(debug=True)
+    """
+    parser = argparse.ArgumentParser(
+        description='Ask questions about the files in this folder.')
+    parser.add_argument('--debug', action='store_true',
+                        help='print each tool name and its arguments')
+    parser.add_argument('message', nargs='*', help='send one message and exit')
+    args = parser.parse_args(argv)
+    if args.message:
+        chat = Chat(debug=args.debug)
+        print(respond(chat, ' '.join(args.message)))
+    else:
+        repl(debug=args.debug)
+
+
 if __name__ == "__main__":
-    repl()
+    main()
